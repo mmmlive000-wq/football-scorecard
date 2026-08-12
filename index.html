@@ -991,7 +991,7 @@ button:active { transform: scale(0.98); }
 <script>
 const role = new URLSearchParams(location.search).get('role') === 'display' ? 'display' : 'controller';
 const broker = "broker.hivemq.com";
-const port = 8000;
+const port = 8884;
 let client;
 let matchID = "";
 
@@ -1076,6 +1076,7 @@ function connectMQTT() {
   matchID = document.getElementById('matchIdInput').value.toUpperCase().trim();
   if (!matchID) return alert("Enter Match ID");
 
+  history.replaceState(null, '', location.pathname + '?match=' + encodeURIComponent(matchID));
   showOverlayLink();
 
   const setupScreen = document.getElementById('setup-screen');
@@ -1092,6 +1093,10 @@ function connectMQTT() {
   };
 
   client.connect({
+    useSSL: true,
+    onFailure: (err) => {
+      document.getElementById('statusText').innerText = "Connect failed: " + (err.errorMessage || err);
+    },
     onSuccess: () => {
       document.getElementById('statusDot').classList.add('connected');
       document.getElementById('statusText').innerText = "Connected: " + matchID;
@@ -1277,7 +1282,11 @@ function initDisplay(matchIdFromUrl) {
   client = new Paho.MQTT.Client(broker, port, clientId);
   client.onConnectionLost = onConnectionLost;
   client.onMessageArrived = onMessageArrived;
-  client.connect({ onSuccess: onConnect, useSSL: false });
+  client.connect({
+    useSSL: true,
+    onSuccess: onConnect,
+    onFailure: (err) => { console.error('Display connect failed', err); }
+  });
 }
 
 function onConnect() {
@@ -1422,7 +1431,8 @@ function createParticleBurst(color) {
 /* ===================== Init ===================== */
 
 if (role === 'controller') {
-  document.getElementById('matchIdInput').value = randomMatchId();
+  const existingMatch = new URLSearchParams(location.search).get('match');
+  document.getElementById('matchIdInput').value = existingMatch ? existingMatch.toUpperCase() : randomMatchId();
   initSwatches();
   resetTimer();
 } else {
