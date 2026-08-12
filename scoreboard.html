@@ -1,0 +1,1439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Scoreboard</title>
+<script>
+(function () {
+  var role = new URLSearchParams(location.search).get('role') === 'display' ? 'display' : 'controller';
+  document.documentElement.classList.add('mode-' + role);
+})();
+</script>
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-primary: #f1f5f9;
+  --bg-secondary: #e2e8f0;
+  --bg-tertiary: #f8fafc;
+  --border-color: rgba(0, 0, 0, 0.1);
+  --text-primary: #1e293b;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --accent-blue: #3b82f6;
+  --accent-green: #22c55e;
+  --accent-red: #ef4444;
+  --accent-orange: #f97316;
+  --gold: #b8860b;
+  --glass: rgba(255, 255, 255, 0.85);
+  --radius: 16px;
+  --home-color: #8b0000;
+  --away-color: #006400;
+}
+
+html.mode-controller body {
+  font-family: 'Roboto', sans-serif;
+  background: linear-gradient(135deg, var(--bg-primary) 0%, #e8edf2 100%);
+  color: var(--text-primary);
+  min-height: 100vh;
+  padding-bottom: 70px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html.mode-display body {
+  font-family: 'Roboto', sans-serif;
+  background: transparent;
+  color: #fff;
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding-top: 20px;
+  overflow: hidden;
+}
+
+#displayApp { display: none; --gold: #ffd700; --glow-intensity: 0.6; }
+html.mode-display #displayApp { display: flex; flex-direction: column; align-items: center; width: 100%; }
+html.mode-display #controllerApp { display: none; }
+
+/* ============ Controller styles ============ */
+
+.container {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 12px;
+}
+
+#setup-screen {
+  position: fixed;
+  top: 0; left: 0; width: 100%; height: 100%;
+  background: linear-gradient(135deg, var(--bg-primary) 0%, #e8edf2 100%);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+}
+
+.setup-box {
+  background: var(--glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  padding: 40px 30px;
+  border-radius: var(--radius);
+  width: 100%;
+  max-width: 400px;
+  text-align: center;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.4);
+  animation: setupFadeIn 0.5s ease-out;
+}
+
+@keyframes setupFadeIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.setup-box h2 {
+  font-family: 'Oswald', sans-serif;
+  font-size: 28px;
+  letter-spacing: 4px;
+  margin-bottom: 30px;
+  background: linear-gradient(135deg, #1e293b 0%, #475569 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.main-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 768px) {
+  .container { padding: 20px; }
+  .main-grid { grid-template-columns: repeat(2, 1fr); }
+  .timer-section { grid-column: span 2; }
+  .penalty-section { grid-column: span 2; }
+  .reset-section { grid-column: span 2; }
+}
+
+@media (min-width: 1024px) {
+  .container { padding: 24px; }
+  .main-grid { grid-template-columns: repeat(3, 1fr); }
+  .timer-section { grid-column: span 1; }
+  .team-section { grid-column: span 1; }
+  .penalty-section { grid-column: span 3; }
+  .reset-section { grid-column: span 3; }
+}
+
+.section {
+  background: var(--glass);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 20px;
+  transition: all 0.3s ease;
+}
+
+.section:hover {
+  border-color: rgba(0, 0, 0, 0.15);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+}
+
+.section-title {
+  font-family: 'Oswald', sans-serif;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: #475569;
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-title::before {
+  content: '';
+  width: 4px;
+  height: 16px;
+  background: var(--accent-blue);
+  border-radius: 2px;
+}
+
+.section-title.danger::before { background: var(--accent-orange); }
+
+.timer-display-control {
+  font-family: 'Oswald', sans-serif;
+  font-size: 72px;
+  font-weight: 600;
+  text-align: center;
+  color: #16a34a;
+  margin: 16px 0;
+  letter-spacing: 4px;
+  transition: all 0.3s ease;
+}
+
+.timer-display-control.paused {
+  color: var(--gold);
+  text-shadow: 0 0 20px rgba(184, 134, 11, 0.3);
+}
+
+@media (max-width: 767px) {
+  .timer-display-control { font-size: 56px; }
+}
+
+.timer-input-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.timer-input-row input { flex: 1; max-width: 100px; }
+.timer-input-row span { font-size: 13px; color: var(--text-muted); }
+
+.timer-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+input, select {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 16px;
+  transition: all 0.3s ease;
+  outline: none;
+}
+
+input:focus, select:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+}
+
+input::placeholder { color: var(--text-muted); }
+
+button {
+  width: 100%;
+  padding: 14px 20px;
+  border-radius: 12px;
+  border: none;
+  font-family: 'Oswald', sans-serif;
+  font-size: 15px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+button::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 0; height: 0;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  transition: width 0.4s, height 0.4s;
+}
+
+button:active::after { width: 300px; height: 300px; }
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent-blue) 0%, #2563eb 100%);
+  color: white;
+  box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+}
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4); }
+
+.btn-success {
+  background: linear-gradient(135deg, var(--accent-green) 0%, #16a34a 100%);
+  color: white;
+  box-shadow: 0 4px 15px rgba(34, 197, 94, 0.3);
+}
+.btn-success:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(34, 197, 94, 0.4); }
+
+.btn-danger {
+  background: linear-gradient(135deg, var(--accent-red) 0%, #dc2626 100%);
+  color: white;
+  box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
+}
+.btn-danger:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4); }
+
+.btn-warning {
+  background: linear-gradient(135deg, var(--accent-orange) 0%, #ea580c 100%);
+  color: white;
+  box-shadow: 0 4px 15px rgba(249, 115, 22, 0.3);
+}
+.btn-warning:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(249, 115, 22, 0.4); }
+
+.btn-secondary {
+  background: linear-gradient(135deg, #cbd5e1 0%, #94a3b8 100%);
+  color: #1e293b;
+}
+.btn-secondary:hover { background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%); }
+
+button:active { transform: scale(0.98); }
+
+.color-picker-container {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.color-swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 3px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+.color-swatch:hover { transform: scale(1.1); }
+.color-swatch.selected {
+  border-color: #1e293b;
+  transform: scale(1.15);
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+}
+.color-swatch.selected::after {
+  content: '✓';
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  color: white;
+  font-size: 16px;
+  font-weight: bold;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.team-control-card {
+  background: var(--bg-tertiary);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+  border-left: 4px solid;
+  transition: all 0.3s ease;
+}
+.team-control-card.home { border-left-color: var(--home-color); }
+.team-control-card.away { border-left-color: var(--away-color); }
+
+.team-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.team-name-input { flex: 1; margin-right: 16px; }
+.score-control { display: flex; align-items: center; gap: 12px; }
+
+.score-display {
+  font-family: 'Oswald', sans-serif;
+  font-size: 48px;
+  font-weight: 700;
+  width: 70px;
+  text-align: center;
+  color: var(--text-primary);
+  transition: all 0.2s ease;
+}
+.score-display.updated { animation: scoreBounce 0.4s ease; color: var(--gold); }
+
+@keyframes scoreBounce {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+}
+
+.score-buttons { display: flex; flex-direction: column; gap: 8px; }
+
+.btn-score {
+  width: 50px;
+  height: 50px;
+  padding: 0;
+  font-size: 28px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+}
+
+.goal-trigger {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+.goal-trigger input { margin-bottom: 10px; }
+
+.btn-goal-trigger {
+  background: linear-gradient(135deg, var(--gold) 0%, #f59e0b 100%);
+  color: #000;
+  font-weight: 600;
+}
+.btn-goal-trigger:hover { box-shadow: 0 6px 20px rgba(255, 215, 0, 0.4); }
+
+.penalty-section { display: none; }
+.penalty-section.active { display: block; }
+
+.penalty-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.penalty-header select { width: auto; padding: 10px 16px; }
+
+.penalty-team-label {
+  font-family: 'Oswald', sans-serif;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  margin: 16px 0 8px;
+}
+
+.penalty-grid { display: grid; gap: 8px; }
+
+.penalty-dot {
+  height: 44px;
+  border: 2px solid var(--border-color);
+  border-radius: 10px;
+  cursor: pointer;
+  background: var(--bg-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-family: 'Oswald', sans-serif;
+  font-size: 16px;
+  color: var(--text-muted);
+  transition: all 0.2s ease;
+}
+.penalty-dot:hover { border-color: var(--text-muted); transform: scale(1.02); }
+.penalty-dot.goal {
+  background: linear-gradient(135deg, var(--accent-green) 0%, #16a34a 100%);
+  border-color: var(--accent-green);
+  color: white;
+  box-shadow: 0 4px 15px rgba(34, 197, 94, 0.3);
+}
+.penalty-dot.miss {
+  background: linear-gradient(135deg, var(--accent-red) 0%, #dc2626 100%);
+  border-color: var(--accent-red);
+  color: white;
+  box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
+}
+
+.reset-section { text-align: center; }
+.reset-warning { font-size: 13px; color: var(--text-muted); margin-top: 10px; }
+
+.connection-status {
+  position: fixed;
+  bottom: 0; left: 0; width: 100%;
+  background: var(--glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  padding: 12px 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  z-index: 100;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent-red);
+  box-shadow: 0 0 10px var(--accent-red);
+  transition: all 0.3s ease;
+}
+.status-dot.connected {
+  background: var(--accent-green);
+  box-shadow: 0 0 10px var(--accent-green);
+  animation: statusPulse 2s ease-in-out infinite;
+}
+
+@keyframes statusPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.page-header { text-align: center; padding: 20px 0; margin-bottom: 8px; }
+.page-header h1 {
+  font-family: 'Oswald', sans-serif;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 3px;
+  color: var(--text-primary);
+}
+@media (min-width: 768px) { .page-header h1 { font-size: 28px; } }
+
+.mt-3 { margin-top: 12px; }
+.mb-2 { margin-bottom: 8px; }
+.text-center { text-align: center; }
+
+/* ============ Overlay link card ============ */
+.link-row { display: flex; gap: 10px; }
+.link-row button { width: auto; padding: 14px 18px; white-space: nowrap; }
+#overlayLinkInput { font-size: 13px; }
+
+/* ============ Display / overlay styles ============ */
+
+.scoreboard {
+  width: 1000px;
+  background: transparent;
+  animation: scoreboardFadeIn 1s ease-out;
+}
+
+@keyframes scoreboardFadeIn {
+  from { opacity: 0; transform: translateY(-20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.scoreboard-bar {
+  display: flex;
+  align-items: stretch;
+  height: 80px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #1a1a2e 0%, #0f0f1a 100%);
+  box-shadow:
+    0 10px 40px rgba(0, 0, 0, 0.8),
+    0 0 60px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  position: relative;
+}
+
+.scoreboard-bar::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(255,255,255,0.3) 20%,
+    rgba(255,255,255,0.5) 50%,
+    rgba(255,255,255,0.3) 80%,
+    transparent 100%);
+}
+
+.team-name-panel {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  font-family: 'Oswald', sans-serif;
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1;
+  text-transform: uppercase;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: all 0.5s ease;
+  position: relative;
+  text-shadow:
+    0 2px 10px rgba(0, 0, 0, 0.8),
+    0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+.team-name-panel::after {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 100px;
+  pointer-events: none;
+}
+
+.team-name-panel.home {
+  background: var(--home-color);
+  justify-content: flex-start;
+  box-shadow: inset -20px 0 40px rgba(0, 0, 0, 0.3);
+}
+.team-name-panel.home::after {
+  right: 0;
+  background: linear-gradient(to left, rgba(0,0,0,0.3), transparent);
+}
+.team-name-panel.away {
+  background: var(--away-color);
+  justify-content: flex-end;
+  box-shadow: inset 20px 0 40px rgba(0, 0, 0, 0.3);
+}
+.team-name-panel.away::after {
+  left: 0;
+  background: linear-gradient(to right, rgba(0,0,0,0.3), transparent);
+}
+
+.score-box {
+  width: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.8) 100%);
+  font-family: 'Oswald', sans-serif;
+  font-size: 48px;
+  font-weight: 700;
+  color: #fff;
+  z-index: 2;
+  position: relative;
+  text-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+  transition: all 0.3s ease;
+}
+.score-box::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: radial-gradient(circle at center, rgba(255,255,255,0.1) 0%, transparent 70%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.score-box.score-highlight::before { opacity: 1; }
+
+.center-section {
+  display: flex;
+  flex-direction: column;
+  width: 140px;
+  background: linear-gradient(180deg, #141422 0%, #0a0a14 100%);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  position: relative;
+}
+
+.timer-box {
+  flex: 6;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  font-family: 'Oswald', sans-serif;
+  font-size: 32px;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1;
+  padding-bottom: 4px;
+  text-shadow: 0 0 15px rgba(255, 255, 255, 0.3);
+  transition: all 0.3s ease;
+}
+.timer-box.urgent {
+  color: #ef4444;
+  text-shadow: 0 0 20px rgba(239, 68, 68, 0.6);
+  animation: timerPulse 1s ease-in-out infinite;
+}
+
+@keyframes timerPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.period-box {
+  flex: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #2a2a4e 0%, #1a1a3e 100%);
+  font-family: 'Oswald', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--gold);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  text-shadow: 0 0 10px rgba(255, 215, 0, 0.4);
+}
+
+.penalty-display {
+  display: none;
+  margin-top: 0;
+  background: linear-gradient(180deg, rgba(26, 26, 46, 0.95) 0%, rgba(15, 15, 26, 0.95) 100%);
+  border-radius: 0 0 10px 10px;
+  padding: 10px 0;
+  box-shadow:
+    0 10px 40px rgba(0, 0, 0, 0.8),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.penalty-display.active {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: penaltyFadeIn 0.5s ease-out;
+}
+
+@keyframes penaltyFadeIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.penalty-row { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; }
+.penalty-dots-container { display: flex; gap: 6px; justify-content: center; }
+
+.penalty-dot-display {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Oswald', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  background: rgba(100, 116, 139, 0.3);
+  border: 2px solid rgba(100, 116, 139, 0.5);
+  color: #64748b;
+  transition: all 0.3s ease;
+}
+.penalty-dot-display.goal {
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+  border-color: #22c55e;
+  color: white;
+  box-shadow: 0 0 15px rgba(34, 197, 94, 0.5);
+}
+.penalty-dot-display.miss {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  border-color: #ef4444;
+  color: white;
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.5);
+}
+
+.penalty-separator { width: 20px; display: flex; align-items: center; justify-content: center; }
+
+.penalty-score {
+  font-family: 'Oswald', sans-serif;
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--gold);
+  min-width: 40px;
+  text-align: center;
+  text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+  display: none;
+}
+
+@keyframes scorePop {
+  0% { transform: scale(1); }
+  20% { transform: scale(1.4); }
+  40% { transform: scale(0.9); }
+  60% { transform: scale(1.15); }
+  80% { transform: scale(0.95); }
+  100% { transform: scale(1); }
+}
+@keyframes scoreGlow {
+  0% { text-shadow: 0 0 20px rgba(255, 215, 0, 0); }
+  50% { text-shadow: 0 0 60px rgba(255, 215, 0, 1), 0 0 100px rgba(255, 215, 0, 0.8); }
+  100% { text-shadow: 0 0 20px rgba(255, 215, 0, 0); }
+}
+.score-pop {
+  animation: scorePop 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55), scoreGlow 0.8s ease-out;
+  color: var(--gold) !important;
+}
+
+#goal-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: radial-gradient(ellipse at center, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0.95) 100%);
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  overflow: hidden;
+}
+#goal-overlay.active { display: flex; opacity: 1; }
+
+.goal-text {
+  font-family: 'Oswald', sans-serif;
+  font-size: 180px;
+  font-weight: 700;
+  letter-spacing: 20px;
+  background: linear-gradient(135deg, var(--gold) 0%, #fff 50%, var(--gold) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  filter: drop-shadow(0 0 40px rgba(255, 215, 0, 0.8));
+  animation: goalSlideIn 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55), goalPulse 1.5s ease-in-out infinite 0.6s;
+}
+
+@keyframes goalSlideIn {
+  0% { transform: translateY(100px) scale(0.5); opacity: 0; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes goalPulse {
+  0%, 100% { transform: scale(1); filter: drop-shadow(0 0 40px rgba(255, 215, 0, 0.8)); }
+  50% { transform: scale(1.05); filter: drop-shadow(0 0 80px rgba(255, 215, 0, 1)); }
+}
+
+.goal-player {
+  font-family: 'Oswald', sans-serif;
+  font-size: 42px;
+  font-weight: 500;
+  color: #fff;
+  margin-top: 30px;
+  text-transform: uppercase;
+  letter-spacing: 5px;
+  animation: playerFadeIn 0.5s ease-out 0.3s backwards;
+  text-shadow: 0 2px 20px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes playerFadeIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+#particles-container {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none;
+  z-index: 999;
+  overflow: hidden;
+}
+
+.particle { position: absolute; width: 10px; height: 10px; border-radius: 50%; pointer-events: none; }
+
+.confetti { position: absolute; width: 12px; height: 12px; animation: confettiFall linear forwards; }
+
+@keyframes confettiFall {
+  0% { transform: translateY(-100px) rotateZ(0deg) rotateY(0deg); opacity: 1; }
+  100% { transform: translateY(100vh) rotateZ(720deg) rotateY(360deg); opacity: 0; }
+}
+
+.goal-streak {
+  position: absolute;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--gold), transparent);
+  animation: streakMove 0.5s ease-out forwards;
+  opacity: 0.8;
+}
+
+@keyframes streakMove {
+  0% { width: 0; }
+  100% { width: 100%; opacity: 0; }
+}
+</style>
+</head>
+<body>
+
+<div id="controllerApp">
+  <div id="setup-screen">
+    <div class="setup-box">
+      <h2>CONTROLLER</h2>
+      <input type="text" id="matchIdInput" placeholder="Match ID (e.g. MATCH1)">
+      <button class="btn-primary mt-3" onclick="connectMQTT()">START CONTROL</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="page-header"><h1>SCOREBOARD CONTROL</h1></div>
+
+    <div class="section" id="overlayLinkCard" style="display:none; margin-bottom:16px;">
+      <div class="section-title">Overlay Link — paste into OBS/VMix Browser Source</div>
+      <input type="text" id="overlayLinkInput" readonly onclick="this.select()">
+      <div class="link-row mt-3">
+        <button class="btn-secondary" id="copyLinkBtn" onclick="copyOverlayLink()">COPY LINK</button>
+        <button class="btn-primary" onclick="window.open(document.getElementById('overlayLinkInput').value,'_blank')">OPEN</button>
+      </div>
+    </div>
+
+    <div class="main-grid">
+      <div class="section timer-section">
+        <div class="section-title">Timer & Period</div>
+        <div class="timer-display-control" id="timerDisplay">45:00</div>
+        <div class="timer-input-row">
+          <input type="number" id="minInput" value="45" min="1" max="120">
+          <span>Minutes</span>
+        </div>
+        <div class="timer-buttons">
+          <button class="btn-success" onclick="startTimer()">Start</button>
+          <button class="btn-secondary" onclick="pauseTimer()">Pause</button>
+          <button class="btn-danger" onclick="resetTimer()">Reset</button>
+        </div>
+        <select id="periodSelect" onchange="updatePeriod()" class="mt-3">
+          <option value="1ST HALF">1ST HALF</option>
+          <option value="2ND HALF">2ND HALF</option>
+          <option value="EXTRA TIME">EXTRA TIME</option>
+          <option value="PENALTIES">PENALTIES</option>
+          <option value="FULL TIME">FULL TIME</option>
+        </select>
+      </div>
+
+      <div class="section team-section">
+        <div class="section-title">Home Team</div>
+        <div class="team-control-card home" id="homeCard">
+          <div class="team-header">
+            <div class="team-name-input">
+              <input type="text" id="homeName" value="HOME TEAM" onchange="updateTeams()">
+            </div>
+            <div class="score-control">
+              <div class="score-display" id="homeScore">0</div>
+              <div class="score-buttons">
+                <button class="btn-success btn-score" onclick="changeScore('home', 1)">+</button>
+                <button class="btn-secondary btn-score" onclick="changeScore('home', -1)">−</button>
+              </div>
+            </div>
+          </div>
+          <div class="color-picker-container" id="homeSwatches"></div>
+          <div class="goal-trigger">
+            <input type="text" id="homeScorer" placeholder="Scorer Name (optional)">
+            <button class="btn-goal-trigger" onclick="sendGoalEvent('home')">⚽ GOAL!</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="section team-section">
+        <div class="section-title">Away Team</div>
+        <div class="team-control-card away" id="awayCard">
+          <div class="team-header">
+            <div class="team-name-input">
+              <input type="text" id="awayName" value="AWAY TEAM" onchange="updateTeams()">
+            </div>
+            <div class="score-control">
+              <div class="score-display" id="awayScore">0</div>
+              <div class="score-buttons">
+                <button class="btn-success btn-score" onclick="changeScore('away', 1)">+</button>
+                <button class="btn-secondary btn-score" onclick="changeScore('away', -1)">−</button>
+              </div>
+            </div>
+          </div>
+          <div class="color-picker-container" id="awaySwatches"></div>
+          <div class="goal-trigger">
+            <input type="text" id="awayScorer" placeholder="Scorer Name (optional)">
+            <button class="btn-goal-trigger" onclick="sendGoalEvent('away')">⚽ GOAL!</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="section penalty-section" id="penalty-controls">
+        <div class="section-title">Penalty Shootout</div>
+        <div class="penalty-header">
+          <span style="color: var(--text-muted); font-size: 14px;">Rounds:</span>
+          <select id="penRoundSelect" onchange="initPenaltyDots()">
+            <option value="5">5</option>
+            <option value="6">6</option>
+            <option value="7">7</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10">10</option>
+            <option value="11">11</option>
+          </select>
+        </div>
+        <div class="penalty-team-label">Home</div>
+        <div id="home-penalties" class="penalty-grid"></div>
+        <div class="penalty-team-label">Away</div>
+        <div id="away-penalties" class="penalty-grid"></div>
+      </div>
+
+      <div class="section reset-section">
+        <div class="section-title danger">⚠️ Match Controls</div>
+        <button class="btn-warning" onclick="totalReset()">🔄 TOTAL RESET</button>
+        <p class="reset-warning">Resets scores, timer, period, and penalty data to defaults</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="connection-status">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusText">Disconnected</span>
+  </div>
+</div>
+
+<div id="displayApp">
+  <div id="displayError" style="display:none; color:#fff; font-family:'Oswald',sans-serif; font-size:20px; text-align:center; padding:60px 20px; max-width:600px; line-height:1.6;">
+    No match found in this link.<br>Open the controller page and copy the overlay link it generates.
+  </div>
+
+  <div class="scoreboard" id="scoreboardRoot">
+    <div class="scoreboard-bar">
+      <div class="team-name-panel home" id="homePanel"><span id="homeNameDisplay">HOME</span></div>
+      <div class="score-box" id="homeScoreDisplay">0</div>
+
+      <div class="center-section">
+        <div class="timer-box" id="timerDisplay2">45:00</div>
+        <div class="period-box" id="periodDisplay">1ST HALF</div>
+      </div>
+
+      <div class="score-box" id="awayScoreDisplay">0</div>
+      <div class="team-name-panel away" id="awayPanel"><span id="awayNameDisplay">AWAY</span></div>
+    </div>
+
+    <div class="penalty-display" id="penaltyDisplay">
+      <div class="penalty-row" id="homePenRow"><div class="penalty-dots-container" id="homePenDots"></div></div>
+      <div class="penalty-separator"></div>
+      <div class="penalty-row" id="awayPenRow"><div class="penalty-dots-container" id="awayPenDots"></div></div>
+    </div>
+  </div>
+
+  <div id="goal-overlay">
+    <div class="goal-text">GOAL!</div>
+    <div class="goal-player" id="goalPlayerDisplay"></div>
+  </div>
+
+  <div id="particles-container"></div>
+</div>
+
+<script>
+const role = new URLSearchParams(location.search).get('role') === 'display' ? 'display' : 'controller';
+const broker = "broker.hivemq.com";
+const port = 8000;
+let client;
+let matchID = "";
+
+const DARK_COLORS = ["#8B0000", "#006400", "#00008B", "#1a1a1a", "#4B0082", "#8B4513", "#C71585", "#FF8C00"];
+let homeColor = "#8B0000";
+let awayColor = "#006400";
+let timerSeconds = 45 * 60;
+let timerInterval = null;
+let homeScore = 0;
+let awayScore = 0;
+let penaltyData = { home: [], away: [], rounds: 5 };
+
+/* ===================== Controller ===================== */
+
+function randomMatchId() {
+  return 'M' + Math.random().toString(36).substring(2, 7).toUpperCase();
+}
+
+function initSwatches() {
+  ['home', 'away'].forEach(side => {
+    const container = document.getElementById(side + 'Swatches');
+    container.innerHTML = '';
+    DARK_COLORS.forEach(color => {
+      const div = document.createElement('div');
+      div.className = 'color-swatch';
+      div.style.backgroundColor = color;
+      div.onclick = () => selectColor(side, color, div);
+      container.appendChild(div);
+      if (side === 'home' && color === '#8B0000') div.classList.add('selected');
+      if (side === 'away' && color === '#006400') div.classList.add('selected');
+    });
+  });
+}
+
+function selectColor(side, color, element) {
+  if (side === 'home') {
+    homeColor = color;
+    document.documentElement.style.setProperty('--home-color', color);
+  } else {
+    awayColor = color;
+    document.documentElement.style.setProperty('--away-color', color);
+  }
+
+  const container = document.getElementById(side + 'Swatches');
+  Array.from(container.children).forEach(c => c.classList.remove('selected'));
+  element.classList.add('selected');
+
+  const card = document.getElementById(side + 'Card');
+  card.style.borderLeftColor = color;
+
+  updateTeams();
+}
+
+function showOverlayLink() {
+  const link = location.origin + location.pathname + '?role=display&match=' + encodeURIComponent(matchID);
+  document.getElementById('overlayLinkInput').value = link;
+  document.getElementById('overlayLinkCard').style.display = 'block';
+}
+
+function copyOverlayLink() {
+  const input = document.getElementById('overlayLinkInput');
+  input.focus();
+  input.select();
+  input.setSelectionRange(0, 99999);
+  let copied = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(input.value);
+      copied = true;
+    }
+  } catch (e) {}
+  if (!copied) {
+    try { copied = document.execCommand('copy'); } catch (e) {}
+  }
+  const btn = document.getElementById('copyLinkBtn');
+  const original = btn.innerText;
+  btn.innerText = copied ? 'COPIED!' : 'SELECT & COPY';
+  setTimeout(() => { btn.innerText = original; }, 1500);
+}
+
+function connectMQTT() {
+  matchID = document.getElementById('matchIdInput').value.toUpperCase().trim();
+  if (!matchID) return alert("Enter Match ID");
+
+  showOverlayLink();
+
+  const setupScreen = document.getElementById('setup-screen');
+  setupScreen.style.opacity = '0';
+  setupScreen.style.transition = 'opacity 0.3s ease';
+  setTimeout(() => setupScreen.style.display = 'none', 300);
+
+  const clientId = "control_" + Math.random().toString(16).substr(2, 8);
+  client = new Paho.MQTT.Client(broker, port, clientId);
+
+  client.onConnectionLost = () => {
+    document.getElementById('statusDot').classList.remove('connected');
+    document.getElementById('statusText').innerText = "Disconnected";
+  };
+
+  client.connect({
+    onSuccess: () => {
+      document.getElementById('statusDot').classList.add('connected');
+      document.getElementById('statusText').innerText = "Connected: " + matchID;
+      updateTeams();
+      updatePeriod();
+      sendTime();
+    }
+  });
+}
+
+function publish(subTopic, payload) {
+  if (!client || !client.isConnected()) return;
+  const message = new Paho.MQTT.Message(payload);
+  message.destinationName = matchID + "/" + subTopic;
+  message.retained = true;
+  client.send(message);
+}
+
+function formatTime(secs) {
+  const m = Math.floor(secs / 60).toString().padStart(2, '0');
+  const s = (secs % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+function sendTime() {
+  const timeStr = formatTime(timerSeconds);
+  document.getElementById('timerDisplay').innerText = timeStr;
+  publish("timer", timeStr);
+}
+
+function startTimer() {
+  if (timerInterval) return;
+  document.getElementById('timerDisplay').classList.remove('paused');
+  timerInterval = setInterval(() => {
+    if (timerSeconds > 0) {
+      timerSeconds--;
+      sendTime();
+    } else {
+      pauseTimer();
+    }
+  }, 1000);
+}
+
+function pauseTimer() {
+  clearInterval(timerInterval);
+  timerInterval = null;
+  document.getElementById('timerDisplay').classList.add('paused');
+}
+
+function resetTimer() {
+  pauseTimer();
+  const mins = parseInt(document.getElementById('minInput').value) || 45;
+  timerSeconds = mins * 60;
+  sendTime();
+}
+
+function updatePeriod() {
+  const p = document.getElementById('periodSelect').value;
+  const penPanel = document.getElementById('penalty-controls');
+
+  if (p === "PENALTIES") {
+    penPanel.classList.add('active');
+    initPenaltyDots();
+  } else {
+    penPanel.classList.remove('active');
+  }
+
+  publish("period", p);
+}
+
+function initPenaltyDots() {
+  const rounds = parseInt(document.getElementById('penRoundSelect').value);
+  penaltyData.rounds = rounds;
+
+  ['home', 'away'].forEach(side => {
+    const oldData = penaltyData[side];
+    penaltyData[side] = new Array(rounds).fill(0);
+    for (let i = 0; i < Math.min(oldData.length, rounds); i++) {
+      penaltyData[side][i] = oldData[i];
+    }
+
+    const container = document.getElementById(side + '-penalties');
+    container.style.gridTemplateColumns = `repeat(${rounds}, 1fr)`;
+    container.innerHTML = '';
+
+    penaltyData[side].forEach((val, index) => {
+      const dot = document.createElement('div');
+      dot.className = 'penalty-dot' + (val === 1 ? ' goal' : val === 2 ? ' miss' : '');
+      dot.innerText = index + 1;
+      dot.onclick = () => {
+        penaltyData[side][index] = (penaltyData[side][index] + 1) % 3;
+        initPenaltyDots();
+        publish("penaltyUpdate", JSON.stringify(penaltyData));
+      };
+      container.appendChild(dot);
+    });
+  });
+
+  publish("penaltyUpdate", JSON.stringify(penaltyData));
+}
+
+function changeScore(side, delta) {
+  const scoreEl = document.getElementById(side + 'Score');
+
+  if (side === 'home') {
+    homeScore = Math.max(0, homeScore + delta);
+    scoreEl.innerText = homeScore;
+    publish("homeScore", homeScore.toString());
+  } else {
+    awayScore = Math.max(0, awayScore + delta);
+    scoreEl.innerText = awayScore;
+    publish("awayScore", awayScore.toString());
+  }
+
+  scoreEl.classList.add('updated');
+  setTimeout(() => scoreEl.classList.remove('updated'), 400);
+}
+
+function updateTeams() {
+  publish("homeConfig", JSON.stringify({ name: document.getElementById('homeName').value, color: homeColor }));
+  publish("awayConfig", JSON.stringify({ name: document.getElementById('awayName').value, color: awayColor }));
+}
+
+function sendGoalEvent(side) {
+  changeScore(side, 1);
+
+  const player = side === 'home'
+    ? document.getElementById('homeScorer').value
+    : document.getElementById('awayScorer').value;
+  const teamName = side === 'home'
+    ? document.getElementById('homeName').value
+    : document.getElementById('awayName').value;
+
+  publish("goalEvent", JSON.stringify({ team: teamName, player: player, color: side === 'home' ? homeColor : awayColor }));
+
+  if (side === 'home') document.getElementById('homeScorer').value = '';
+  else document.getElementById('awayScorer').value = '';
+}
+
+function totalReset() {
+  if (!confirm("Are you sure you want to reset the entire scoreboard? This will reset scores, timer, period, and penalty data.")) {
+    return;
+  }
+
+  homeScore = 0;
+  awayScore = 0;
+  document.getElementById('homeScore').innerText = '0';
+  document.getElementById('awayScore').innerText = '0';
+  publish("homeScore", "0");
+  publish("awayScore", "0");
+
+  pauseTimer();
+  document.getElementById('minInput').value = 45;
+  timerSeconds = 45 * 60;
+  sendTime();
+
+  document.getElementById('periodSelect').value = "1ST HALF";
+  document.getElementById('penalty-controls').classList.remove('active');
+  publish("period", "1ST HALF");
+
+  penaltyData = { home: [], away: [], rounds: 5 };
+  document.getElementById('penRoundSelect').value = "5";
+  publish("penaltyUpdate", JSON.stringify(penaltyData));
+
+  document.getElementById('homeName').value = "HOME TEAM";
+  document.getElementById('awayName').value = "AWAY TEAM";
+  homeColor = "#8B0000";
+  awayColor = "#006400";
+  document.documentElement.style.setProperty('--home-color', homeColor);
+  document.documentElement.style.setProperty('--away-color', awayColor);
+  document.getElementById('homeCard').style.borderLeftColor = homeColor;
+  document.getElementById('awayCard').style.borderLeftColor = awayColor;
+
+  initSwatches();
+  updateTeams();
+}
+
+/* ===================== Display / overlay ===================== */
+
+function initDisplay(matchIdFromUrl) {
+  matchID = matchIdFromUrl;
+  const clientId = "display_" + Math.random().toString(16).substr(2, 8);
+  client = new Paho.MQTT.Client(broker, port, clientId);
+  client.onConnectionLost = onConnectionLost;
+  client.onMessageArrived = onMessageArrived;
+  client.connect({ onSuccess: onConnect, useSSL: false });
+}
+
+function onConnect() {
+  client.subscribe(matchID + "/#");
+}
+
+function onConnectionLost(responseObject) {
+  if (responseObject.errorCode !== 0) console.log("Connection Lost: " + responseObject.errorMessage);
+}
+
+function onMessageArrived(message) {
+  const topic = message.destinationName;
+  const payload = message.payloadString;
+
+  if (topic.includes("/timer")) {
+    const timerEl = document.getElementById('timerDisplay2');
+    timerEl.innerText = payload;
+    const minutes = parseInt(payload.split(':')[0]);
+    if (minutes < 5) timerEl.classList.add('urgent');
+    else timerEl.classList.remove('urgent');
+  }
+  else if (topic.includes("/period")) {
+    document.getElementById('periodDisplay').innerText = payload;
+    const penaltyDisplay = document.getElementById('penaltyDisplay');
+    if (payload === "PENALTIES") penaltyDisplay.classList.add('active');
+    else penaltyDisplay.classList.remove('active');
+  }
+  else if (topic.includes("/homeScore")) updateScore('home', payload);
+  else if (topic.includes("/awayScore")) updateScore('away', payload);
+  else if (topic.includes("/homeConfig")) {
+    const data = JSON.parse(payload);
+    document.getElementById('homeNameDisplay').innerText = data.name;
+    document.getElementById('homePanel').style.background = data.color;
+    document.documentElement.style.setProperty('--home-color', data.color);
+  }
+  else if (topic.includes("/awayConfig")) {
+    const data = JSON.parse(payload);
+    document.getElementById('awayNameDisplay').innerText = data.name;
+    document.getElementById('awayPanel').style.background = data.color;
+    document.documentElement.style.setProperty('--away-color', data.color);
+  }
+  else if (topic.includes("/goalEvent")) triggerGoalAnimation(JSON.parse(payload));
+  else if (topic.includes("/penaltyUpdate")) updatePenaltyDisplay(JSON.parse(payload));
+}
+
+function updateScore(side, score) {
+  const el = document.getElementById(side + 'ScoreDisplay');
+  el.innerText = score;
+  el.classList.remove('score-pop');
+  void el.offsetWidth;
+  el.classList.add('score-pop');
+  el.classList.add('score-highlight');
+  setTimeout(() => { el.classList.remove('score-highlight'); }, 1000);
+}
+
+function updatePenaltyDisplay(data) {
+  ['home', 'away'].forEach(side => {
+    const dotsContainer = document.getElementById(side + 'PenDots');
+    dotsContainer.innerHTML = '';
+    data[side].forEach((val, index) => {
+      const dot = document.createElement('div');
+      dot.className = 'penalty-dot-display';
+      dot.innerText = index + 1;
+      const v = parseInt(val);
+      if (v === 1) dot.classList.add('goal');
+      else if (v === 2) dot.classList.add('miss');
+      dotsContainer.appendChild(dot);
+    });
+  });
+}
+
+function triggerGoalAnimation(data) {
+  const overlay = document.getElementById('goal-overlay');
+  const playerDiv = document.getElementById('goalPlayerDisplay');
+
+  playerDiv.innerText = data.player ? data.player + " scores for " + data.team : "GOAL FOR " + data.team;
+  playerDiv.style.color = data.color;
+
+  createConfetti(data.color);
+  createParticleBurst(data.color);
+
+  overlay.classList.add('active');
+  setTimeout(() => { overlay.classList.remove('active'); }, 4000);
+}
+
+function createConfetti(color) {
+  const container = document.getElementById('particles-container');
+  const colors = [color, '#ffd700', '#fff', '#ff6b6b', '#4ecdc4'];
+
+  for (let i = 0; i < 100; i++) {
+    const confetti = document.createElement('div');
+    confetti.className = 'confetti';
+    confetti.style.left = Math.random() * 100 + 'vw';
+    confetti.style.top = '-20px';
+    confetti.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+    confetti.style.transform = `rotate(${Math.random() * 360}deg)`;
+    confetti.style.animationDuration = (2 + Math.random() * 2) + 's';
+    confetti.style.animationDelay = Math.random() * 0.5 + 's';
+
+    if (Math.random() > 0.5) {
+      confetti.style.borderRadius = '0';
+      confetti.style.width = '8px';
+      confetti.style.height = '16px';
+    }
+
+    container.appendChild(confetti);
+    setTimeout(() => confetti.remove(), 4500);
+  }
+}
+
+function createParticleBurst(color) {
+  const container = document.getElementById('particles-container');
+  const centerX = window.innerWidth / 2;
+  const centerY = window.innerHeight / 2;
+
+  for (let i = 0; i < 30; i++) {
+    const particle = document.createElement('div');
+    particle.className = 'particle';
+    particle.style.left = centerX + 'px';
+    particle.style.top = centerY + 'px';
+    particle.style.backgroundColor = i % 2 === 0 ? color : '#ffd700';
+    particle.style.boxShadow = `0 0 10px ${color}`;
+
+    const angle = (i / 30) * Math.PI * 2;
+    const velocity = 200 + Math.random() * 300;
+    const destX = centerX + Math.cos(angle) * velocity;
+    const destY = centerY + Math.sin(angle) * velocity;
+
+    particle.animate([
+      { transform: 'translate(0, 0) scale(1)', opacity: 1 },
+      { transform: `translate(${destX - centerX}px, ${destY - centerY}px) scale(0)`, opacity: 0 }
+    ], {
+      duration: 1000 + Math.random() * 500,
+      easing: 'cubic-bezier(0, 0.5, 0.5, 1)'
+    });
+
+    container.appendChild(particle);
+    setTimeout(() => particle.remove(), 1500);
+  }
+}
+
+/* ===================== Init ===================== */
+
+if (role === 'controller') {
+  document.getElementById('matchIdInput').value = randomMatchId();
+  initSwatches();
+  resetTimer();
+} else {
+  const matchParam = new URLSearchParams(location.search).get('match');
+  if (!matchParam) {
+    document.getElementById('scoreboardRoot').style.display = 'none';
+    document.getElementById('displayError').style.display = 'block';
+  } else {
+    initDisplay(matchParam.toUpperCase().trim());
+  }
+}
+</script>
+</body>
+</html>
